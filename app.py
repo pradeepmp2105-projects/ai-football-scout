@@ -7,7 +7,9 @@ from openai import OpenAI
 from comparison import compare_players, get_player_history
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+openai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
+client = OpenAI(api_key=openai_key)
 
 df = pd.read_csv("players.csv")
 
@@ -76,29 +78,19 @@ else:
     analysis_focus = "Focus on goals, assists and G+A per 90 as primary metrics."
 
 # Session state init
-if 'results_ready' not in st.session_state:
+for key in ['results_ready', 'perf_data', 'perf_report', 'human_data', 'human_report',
+            'verdict_data', 'verdict', 'display', 'top_3_players', 'club_squad_detail',
+            'show_comparison', 'your_club_saved']:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+if st.session_state.results_ready is None:
     st.session_state.results_ready = False
-if 'perf_data' not in st.session_state:
-    st.session_state.perf_data = None
-if 'perf_report' not in st.session_state:
-    st.session_state.perf_report = None
-if 'human_data' not in st.session_state:
-    st.session_state.human_data = None
-if 'human_report' not in st.session_state:
-    st.session_state.human_report = None
-if 'verdict_data' not in st.session_state:
-    st.session_state.verdict_data = None
-if 'verdict' not in st.session_state:
-    st.session_state.verdict = None
-if 'display' not in st.session_state:
-    st.session_state.display = None
-if 'top_3_players' not in st.session_state:
-    st.session_state.top_3_players = None
-if 'club_squad_detail' not in st.session_state:
-    st.session_state.club_squad_detail = ""
-if 'show_comparison' not in st.session_state:
+if st.session_state.show_comparison is None:
     st.session_state.show_comparison = False
-if 'your_club_saved' not in st.session_state:
+if st.session_state.club_squad_detail is None:
+    st.session_state.club_squad_detail = ""
+if st.session_state.your_club_saved is None:
     st.session_state.your_club_saved = "Any"
 
 def scout_notes_box(text):
@@ -137,6 +129,7 @@ if st.button("🔍 Find Transfer Targets", type="primary", use_container_width=T
 
     filtered = filtered[filtered['age'] <= max_age]
     filtered = filtered[filtered['Playing Time_Min'] >= min_minutes]
+
     if min_goals > 0:
         filtered = filtered[filtered['Performance_Gls'] >= min_goals]
     if min_assists > 0:
@@ -194,7 +187,7 @@ CURRENT SQUAD WITH NATIONALITIES: {club_squad_detail}
 
         st.session_state.club_squad_detail = club_squad_detail
 
-        # Performance Analysis
+        # ── Performance Analysis ──
         with st.spinner("Analysing player performance..."):
             perf_prompt = f"""
 You are an elite football scout and transfer analyst.
@@ -205,14 +198,49 @@ TRANSFER BUDGET: {budget}
 POSITION NEEDED: {position}
 ANALYSIS FOCUS: {analysis_focus}
 
-YOU MUST ONLY ANALYSE THESE EXACT PLAYERS:
+YOU MUST ANALYSE ALL 3 OF THESE EXACT PLAYERS — ALL THREE, NOT JUST ONE:
 {top_3_players.to_string()}
+
+PLAYER 1: {top_3_players.iloc[0]['Player']} at {top_3_players.iloc[0]['Club']}
+PLAYER 2: {top_3_players.iloc[1]['Player']} at {top_3_players.iloc[1]['Club']}
+PLAYER 3: {top_3_players.iloc[2]['Player']} at {top_3_players.iloc[2]['Club']}
+
+Your JSON response MUST contain exactly 3 player objects in the "players" array.
+Do not skip any player. Do not combine players. Each player gets their own object.
 
 Return ONLY a JSON object, no other text, no markdown, no backticks.
 Exactly this structure:
 
 {{
   "players": [
+    {{
+      "name": "Player Name",
+      "club": "Club Name",
+      "nation": "NAT",
+      "age": 25,
+      "performance_score": 8,
+      "transfer_likelihood": "High",
+      "transfer_likelihood_score": 80,
+      "estimated_fee": "£30m - £40m",
+      "strengths": ["strength 1", "strength 2", "strength 3"],
+      "concerns": ["concern 1", "concern 2"],
+      "one_line_summary": "One sentence scouting summary",
+      "detailed_analysis": "Three to four sentence detailed scout analysis"
+    }},
+    {{
+      "name": "Player Name",
+      "club": "Club Name",
+      "nation": "NAT",
+      "age": 25,
+      "performance_score": 8,
+      "transfer_likelihood": "High",
+      "transfer_likelihood_score": 80,
+      "estimated_fee": "£30m - £40m",
+      "strengths": ["strength 1", "strength 2", "strength 3"],
+      "concerns": ["concern 1", "concern 2"],
+      "one_line_summary": "One sentence scouting summary",
+      "detailed_analysis": "Three to four sentence detailed scout analysis"
+    }},
     {{
       "name": "Player Name",
       "club": "Club Name",
@@ -240,17 +268,30 @@ Exactly this structure:
                     {"role": "system", "content": "You are an elite football scout. Return only valid JSON. No markdown, no backticks, no extra text."},
                     {"role": "user", "content": perf_prompt}
                 ],
-                max_tokens=2000,
+                max_tokens=3000,
                 temperature=0.7
             )
             try:
                 st.session_state.perf_data = json.loads(perf_response.choices[0].message.content)
                 st.session_state.perf_report = perf_response.choices[0].message.content
             except json.JSONDecodeError:
-                st.session_state.perf_report = perf_response.choices[0].message.content
-                st.session_state.perf_data = None
+                perf_response2 = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an elite football scout. Return only valid JSON. No markdown, no backticks, no extra text."},
+                        {"role": "user", "content": perf_prompt}
+                    ],
+                    max_tokens=3000,
+                    temperature=0.5
+                )
+                try:
+                    st.session_state.perf_data = json.loads(perf_response2.choices[0].message.content)
+                    st.session_state.perf_report = perf_response2.choices[0].message.content
+                except json.JSONDecodeError:
+                    st.session_state.perf_report = perf_response2.choices[0].message.content
+                    st.session_state.perf_data = None
 
-        # Human Factors Analysis
+        # ── Human Factors Analysis ──
         with st.spinner("Analysing human factors..."):
             human_prompt = f"""
 You are a football transfer expert specialising in human and cultural factors.
@@ -261,8 +302,15 @@ TRANSFER BUDGET: {budget}
 CURRENT SQUAD WITH PLAYER NAMES AND NATIONALITIES:
 {club_squad_detail if club_squad_detail else "Unknown"}
 
-YOU MUST ONLY ANALYSE THESE EXACT 3 PLAYERS — NO OTHERS:
+YOU MUST ONLY ANALYSE THESE EXACT 3 PLAYERS — ALL THREE, NOT JUST ONE:
 {top_3_players[['Player', 'Club', 'Nation', 'Age']].to_string()}
+
+PLAYER 1: {top_3_players.iloc[0]['Player']}
+PLAYER 2: {top_3_players.iloc[1]['Player']}
+PLAYER 3: {top_3_players.iloc[2]['Player']}
+
+Your JSON response MUST contain exactly 3 player objects in the "players" array.
+Do not skip any player.
 
 Return ONLY a JSON object, no other text, no markdown, no backticks.
 Exactly this structure:
@@ -295,6 +343,60 @@ Exactly this structure:
       "overall_human_fit_score": 8,
       "one_line_verdict": "One sentence overall verdict",
       "detailed_human_analysis": "Three to four sentence detailed human factors analysis"
+    }},
+    {{
+      "name": "Player Name",
+      "international_chemistry": {{
+        "has_compatriots": false,
+        "compatriot_names": [],
+        "chemistry_score": 5,
+        "summary": "One sentence summary"
+      }},
+      "club_rivalry": {{
+        "rivalry_exists": false,
+        "rivalry_level": "Low",
+        "fan_acceptance": "Welcomed",
+        "summary": "One sentence summary"
+      }},
+      "city_lifestyle": {{
+        "adaptation_score": 7,
+        "summary": "One sentence summary"
+      }},
+      "contract_career": {{
+        "career_stage": "Peak",
+        "move_makes_sense": true,
+        "summary": "One sentence summary"
+      }},
+      "overall_human_fit_score": 7,
+      "one_line_verdict": "One sentence overall verdict",
+      "detailed_human_analysis": "Three to four sentence detailed human factors analysis"
+    }},
+    {{
+      "name": "Player Name",
+      "international_chemistry": {{
+        "has_compatriots": false,
+        "compatriot_names": [],
+        "chemistry_score": 5,
+        "summary": "One sentence summary"
+      }},
+      "club_rivalry": {{
+        "rivalry_exists": false,
+        "rivalry_level": "Low",
+        "fan_acceptance": "Welcomed",
+        "summary": "One sentence summary"
+      }},
+      "city_lifestyle": {{
+        "adaptation_score": 7,
+        "summary": "One sentence summary"
+      }},
+      "contract_career": {{
+        "career_stage": "Peak",
+        "move_makes_sense": true,
+        "summary": "One sentence summary"
+      }},
+      "overall_human_fit_score": 7,
+      "one_line_verdict": "One sentence overall verdict",
+      "detailed_human_analysis": "Three to four sentence detailed human factors analysis"
     }}
   ]
 }}
@@ -305,17 +407,30 @@ Exactly this structure:
                     {"role": "system", "content": "You are a football transfer expert. Return only valid JSON. No markdown, no backticks. Only analyse exact players provided."},
                     {"role": "user", "content": human_prompt}
                 ],
-                max_tokens=1500,
+                max_tokens=3000,
                 temperature=0.8
             )
             try:
                 st.session_state.human_data = json.loads(human_response.choices[0].message.content)
                 st.session_state.human_report = human_response.choices[0].message.content
             except json.JSONDecodeError:
-                st.session_state.human_report = human_response.choices[0].message.content
-                st.session_state.human_data = None
+                human_response2 = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a football transfer expert. Return only valid JSON. No markdown, no backticks. Only analyse exact players provided."},
+                        {"role": "user", "content": human_prompt}
+                    ],
+                    max_tokens=3000,
+                    temperature=0.5
+                )
+                try:
+                    st.session_state.human_data = json.loads(human_response2.choices[0].message.content)
+                    st.session_state.human_report = human_response2.choices[0].message.content
+                except json.JSONDecodeError:
+                    st.session_state.human_report = human_response2.choices[0].message.content
+                    st.session_state.human_data = None
 
-        # Verdict
+        # ── Verdict ──
         with st.spinner("Generating final verdict..."):
             verdict_prompt = f"""
 You are the head of recruitment at {your_club if your_club != "Any" else "a Premier League club"}.
@@ -326,7 +441,7 @@ You have two reports on these exact players:
 PERFORMANCE ANALYSIS: {st.session_state.perf_report}
 HUMAN FACTORS ANALYSIS: {st.session_state.human_report}
 
-ONLY score and recommend the players listed above.
+ONLY score and recommend the players listed above. Do not introduce any new players.
 
 Return ONLY a JSON object, no other text, no markdown, no backticks.
 Exactly this structure:
@@ -339,6 +454,18 @@ Exactly this structure:
       "performance_score": 8,
       "human_score": 7,
       "combined_score": 7.5
+    }},
+    {{
+      "name": "Player Name",
+      "performance_score": 7,
+      "human_score": 8,
+      "combined_score": 7.5
+    }},
+    {{
+      "name": "Player Name",
+      "performance_score": 6,
+      "human_score": 7,
+      "combined_score": 6.5
     }}
   ],
   "risk_rating": "Medium",
@@ -364,7 +491,7 @@ Exactly this structure:
 
         st.session_state.results_ready = True
 
-# ── DISPLAY RESULTS FROM SESSION STATE ──
+# ── DISPLAY RESULTS ──
 if st.session_state.results_ready and st.session_state.display is not None:
 
     display = st.session_state.display
@@ -382,7 +509,7 @@ if st.session_state.results_ready and st.session_state.display is not None:
     st.dataframe(display, use_container_width=True, hide_index=True)
     st.divider()
 
-    # Performance Analysis Display
+    # Performance Display
     st.subheader("🤖 AI Performance Analysis")
 
     if perf_data:
@@ -420,7 +547,7 @@ if st.session_state.results_ready and st.session_state.display is not None:
 
                 with right:
                     st.markdown("**📋 Scout Notes**")
-                    scout_notes_box(player['detailed_analysis'])
+                    scout_notes_box(player.get('detailed_analysis', 'Analysis not available.'))
 
                 st.divider()
 
@@ -475,7 +602,7 @@ if st.session_state.results_ready and st.session_state.display is not None:
 
                 with right:
                     st.markdown("**📋 Human Factors Notes**")
-                    scout_notes_box(player['detailed_human_analysis'])
+                    scout_notes_box(player.get('detailed_human_analysis', 'Analysis not available.'))
 
                 st.divider()
     else:
